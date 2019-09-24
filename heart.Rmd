@@ -1,0 +1,228 @@
+---
+title: "Heart Disease"
+author: "Stephen Wang"
+date: "16/09/2019"
+output: html_document
+---
+
+My dad, like every other Asian father, had big hopes for me to become a doctor. But after watching Scrubs and it's soul-crushing depiction of medical practitioners, I quickly bid that dream farewell. This project is both a means of redeeming myself and putting into practice what I learnt from the previous forest fire project and the statistical theory I am learning right now. 
+
+The goal of this study is to investigate if there are any factors that is a clear indication of cardiovascular health. 
+
+The data was retrieved from https://www.kaggle.com/ronitf/heart-disease-uci and https://archive.ics.uci.edu/ml/datasets/heart+Disease in which the data was gathered from the Cleveland patient database. Each patient has a chest pain type (explained below).
+
+As usual, our plan of attack:
+(1) understand the variables in our dataset
+(2) clean and manipulate the data 
+(3) statistical analysis 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr) #data manipulation
+library(tidyr) #tidying data 
+library(readr) #reading files 
+library(ggplot2) #data visualisation
+library(purrr) #toolkit for functions and vectors
+library(stringr) #string manipulation
+library(reshape2) #reshaping data
+library(randomForest) #decision trees 
+library(caret) #classification and regression training
+```
+
+```{r}
+heart_disease <- read_csv('heart.csv')
+dim(heart_disease)
+head(heart_disease, 10)
+tail(heart_disease, 10)
+colSums(is.na(heart_disease))
+summary(heart_disease)
+```
+
+There are 303 rows and 14 columns with no null values.
+
+Gathered from: https://archive.ics.uci.edu/ml/datasets/heart+Disease
+
+age: range from 29 to 71
+sex: gender: 0 = female, 1 = male
+cp: chest pain type: 0 = typical angina, 1 = atypical angina, 2 = non-anginal pain, 3 = asymptomatic
+trestbps: resting blood pressure
+chol: cholestrol mg/dl
+fbs: fasting blood sugar mg/dl: 0 = no, 1 = yes
+restecg: resting electrocardiographic results: 0 = probable/definite left ventricular hypertrophy by Estes' criteria, 1 = normal, 2 = having ST-T wave abnormality
+thalach: maximum heart rate achieved
+exang: exercise induced angina: 0 = no  , 1 = yes
+oldpeak: ST depression induced by exercise relative to rest
+slope: slope of the peak exercise ST segment (?): 0 = upslope, 1 = flat, 2 = downslope 
+ca: number of major vessels (0-3) colored by flourosopy
+thal: radioactive tracer injected during stress test 1 = fixed defect, 2 = normal, 3 = reversable defect
+target: 0 = no disease, 1 = disease 
+
+Two things that immediately come to my attention:
+- many of these variables are categorical denoted by numbers so we need to change the types of these columns
+- 'target' is most likely going to be our dependent variable as that is related to this study's goal 
+
+Furthermore, we could follow the trend and categorise 'age' into different groups (young, middle, old)
+
+Rather than 0 = female, 1 = male, we could simplify the data by factoring 0 = not male, 1 = male (binary??)
+
+We have 138 cases of people without heart disease and 165 cases of people with heart disease.
+
+```{r}
+col_indexes <- c(2:3,7,9,11:14)
+heart_disease[,col_indexes] <- lapply(heart_disease[,col_indexes],as.factor)
+heart_disease$sex = factor(
+  heart_disease$sex, levels = 0:1,
+  labels = c("female", "male")
+)
+str(heart_disease)
+```
+
+```{r}
+ggplot(data=heart_disease,
+       aes(x=age))+
+  geom_histogram(stat="count")
+```
+
+Histogram of age is fairly normally distributed and indicates that majority of patients will fall between 40 and 66. It is rare for the younger population to experience chest pain. 
+
+What do we do here?
+I think we need to use a classification tool (machine learning) to understand which features are most significant in identifying heart disease. 
+
+```{r}
+table(heart_disease$target)
+
+# Data Partition 
+set.seed(33) # My favourite number
+samp <- sample(2, nrow(heart_disease), replace=TRUE, prob=c(0.7,0.3))
+training_data <- heart_disease[samp==1,] # Training with 70% of our dataset
+testing_data <- heart_disease[samp==2,] # Testing with 30% of our dataset
+
+# Random Forest
+rf <- randomForest(target~., data=training_data)
+print(rf)
+attributes(rf)
+
+# Prediction & Confusion Matrix - train data 
+prediction_1 <- predict(rf, training_data)
+confusionMatrix(prediction_1, training_data$target)
+
+# Prediction & Confusion Matrix - test data
+prediction_2 <- predict(rf, testing_data)
+confusionMatrix(prediction_2, testing_data$target)
+
+# Error rate
+plot(rf)
+
+# Tune mtry
+training_data$target <- as.factor(training_data$target)
+training_data <- as.data.frame(training_data)
+t <- tuneRF(training_data[,-14], training_data[,14],
+             stepFactor=0.5,
+             plot=TRUE,
+             ntreeTry=500,
+             trace=TRUE,
+             improve=0.05)
+
+# Random Forest Version 2
+rf <- randomForest(target~., data=training_data,
+                   ntree = 500,
+                   mtry = 3,
+                   importance = TRUE,
+                   proximity = TRUE)
+print(rf)
+
+# No. of Tree Nodes
+hist(treesize(rf))
+
+# Variable Importance
+varImpPlot(rf,
+           n.var = 3)
+importance(rf)
+varUsed(rf)
+
+# Partial Dependence Plot 
+partialPlot(rf, training_data, ca, "1")
+partialPlot(rf, training_data, thalach, "1")
+partialPlot(rf, training_data, cp, "1")
+partialPlot(rf, training_data, oldpeak, "1")
+```
+
+How does the random forest algorithm work?
+(1) Draw ntree bootstrap samples
+(2) For each ntree bootstrap sample, grow unpruned tree by choosing best split based on a random sample of mtry predictors at each node
+(3) Predict new data using majority votes for classification and average for regression based on mtry trees
+Reference: https://www.youtube.com/watch?v=dJclNIN-TPo
+
+# Random Forest 
+Derived from our model: 
+ntree = 500
+mtry: the number of variables available for splitting at each tree node = 3 (which is often square root of the number of features)
+estimated accuracy = 1 - 0.184 = 0.816 (note: this is oob error which is prediction error using data not in bootstrap sample)
+confusion matrix: very close error percentage when predicting whether target has heart disease n=0,1 
+
+# Prediction & Confusion Matrix - training data
+The accuracy is based on the 'training' data which was already observed by the random forest model. 
+
+# Prediction & Confusion Matrix - testing data
+The accuracy has dropped from 100% to 83.52% (the random forest model has not observed the test data before) which is a more accurate accuracy assessment of the model. If we put this into context, approximately 1/5 classifications will be incorrect. 
+
+The confidence interval has a moderate spread (0.7427, 0.9047). 
+
+Sensitivity and specificity are two fundamental aspects of machine learning. 
+(a) sensitivity: "the proportion of actual positive cases that got predicted as positive", also known as, false negative rate. 
+(b) specificity: "the proportion of actual negatives", also known as, false positive rate. 
+These two measures are used to plot the ROC curve in which the AUC determines the model's performance. 
+
+# Error Rate
+
+The error rate does not plateau at any point so we can experiment with the number of trees to increase accuracy. 
+
+# Tune Model and Error Rate
+
+Seems like we can't tune the model to reduce the error rate. Confusion matrix indicates that our model is able to predict heart disease better than non-heart disease. 
+
+# No. of Tree Nodes
+
+The histogram shows us that the number of nodes in the random forest model sit predominantly between 32 and 37.
+
+# Variable Importance
+
+We have two graphs here: 
+(a) Left depicts the decrease in accuracy if the variable was excluded 
+(b) Right depicts the decrease in Gini Impurity (the probability that the model classifies the datapoint incorrectly) of a node if the variable was excluded. 
+
+Reference: 
+https://towardsdatascience.com/an-implementation-and-explanation-of-the-random-forest-in-python-77bf308a9b76
+
+# Partial Dependence Plots 
+
+I wanted to see how the model interacted with the top three important variables and the partial dependence plots gives us some idea what the model is doing. 
+
+cp (chest pain type): when chest pain is 1, 2, or 3, the model is more likely to classify as heart disease. Typical angina (catergorised as 0) is associated with the lack of blood and/or oxygen to the haert typically caused my blockage or plaque buildup but does not increase the risk of heart attack. On the other hand, atypical angina, non-anginal pain, and asymptomatic patients are much more likely to get a heart attack as it denotes something more severe. 
+
+thalach (maximum heart rate): the model suggests that patients with 145 to 200 bpm are more likely to have a heart attack - but doesnt a high maximum heart rate indicate a healthy heart? Tachycardia is a common disease when the heart beat is too fast or irregular which increases the risk of heart disease. This is just an assumption but this may be a possible explanation.  
+
+ca (major vessels colored by fluoroscopy): the model predicted heart disease when ca was 0 and 4, and not heart disease when ca was 1, 2 and 3. Fluroscopy is an imaging technique to obtain real time movement of the interior body so medical professionals can examine the movement of blood. I could not find information regarding the respective major vessels. 
+
+oldpeak (ST depression induced by exercise relative to rest): ST depression is a common symptom across various heart diseases; typical angina included. This means ST depression can be representative of both serious and non-serious heart diseases. Our model classifies very low levels (0-1) of ST depression as heart disease, and the model is more likely to categorise non-heart disease as ST depression increases. 
+
+# SUMMARY: 
+
+This model has a 83.52% accuracy rate when predicting heart disease in patients which is risky if applied in the real world; a thereotical 1/5 misdiagnoses. However, the random forest model did help us understand which variables it deemed important, and as a result, help guide us in some direction. 
+
+Our goal was to investigate any factors that could identify heart disease and the model identified four variables of importance; chest pain type, maximum heart rate, major vessels coloured by fluoroscopy, and ST depression. Having done some research, these are also some of the variables doctors look at when diagnosing patients with heart disease, however, there are so many different factors outside of this dataset i.e. smoking, family history, etc. which increases the risk of heart disease.
+
+The medical world is extensive and every case is almost different. Next time, we need more data for machine learning, possibly more variables, and a whole ton more knowledge. 
+
+
+
+
+
+
+
+
+
+
+
+
